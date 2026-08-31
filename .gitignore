@@ -46,3 +46,27 @@ final_compare.txt
 
 # Transient pod bundles (upload artifacts — not source)
 pod_bundle*/
+
+# Internal docs + one-off scripts (not for public repo)
+MEMORY.md
+PROJECT_NOTES.md
+PROJECT_REPORT.txt
+PROJECT_REPORT_2026.pdf
+RELEASE_PROMOTION.md
+HF_DATASET_CARD.md
+LIVE_DRIVE_CHECKLIST.md
+LINKEDIN_DESCRIPTION.txt
+a100_*.sh
+after_v*.sh
+auto_shutdown.sh
+fetch_pod_results.sh
+launch_v*.sh
+monitor_small.sh
+morning_start.sh
+wait_then_resume.sh
+jupyter_deploy.py
+plate_ab.py
+build_report_pdf.py
+pod_bundle/compare_ckpts.py
+pod_bundle/train_classifier.py
+pod_compare_*.txt
