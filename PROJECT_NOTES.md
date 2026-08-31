@@ -1087,3 +1087,14 @@ server:
   Next real lever = user's OWN real footage from live drives (zero rights issues + real
   distribution), or new-region variety at scale.
 - All pods terminated. models/v20,v21,v22 checkpoints saved locally for reference.
+
+## 2026-08-31 — PROJECT PUBLISHED 🎉
+- GITHUB: https://github.com/rdo11/mobile_tracker (public, clean 1-commit history,
+  no large files, no secrets, no private paths, no personal docs)
+- HUGGING FACE MODEL: https://huggingface.co/rdo11/euro-dashcam-vehicle-classifier
+  (model.pt + card with honest metrics)
+- HUGGING FACE DATASET: https://huggingface.co/datasets/rdo11/euro-dashcam-vehicle-dataset
+  (550MB crops tar + CC-BY-NC-4.0 provenance card)
+- LINKEDIN PDF: PROJECT_REPORT_2026.pdf (3 pages, honest numbers)
+- Privacy fixes: absolute user paths → portable; .git 8.6GB → 280KB via fresh history
+- Next: live-drive validation (checklist ready, blur on) → own-footage dataset round
