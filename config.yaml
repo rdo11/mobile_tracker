@@ -1,0 +1,212 @@
+# ============================================================
+# Mobile Tracker — privacy-first vehicle tracking & classification
+# Camera / capture
+# ============================================================
+camera:
+  # Device index (0, 1, ...) or RTSP/Sony camera URL, e.g.
+  # "rtsp://192.168.0.10:554/stream1" or a Sony camera URL
+  # OpenCV indices: 0 = Iriun, 1 = iPhone (Continuity Camera), 2 = MacBook
+  # built-in (its green LED lights when opened — confirmed empirically)
+  # Replay mode: point at a video file to run the pipeline on a recording,
+  # e.g. "storage/recordings/session_20260819_152400.mp4" (loops at EOF)
+  source: "storage/driving_videos_src4/YTDown.com_YouTube_Madrid-4K-Driving-Downtown-Spain_Media_C911U_Fo-QU_001_1080p.mp4"
+  width: 1920
+  height: 1080
+  fps: 30
+  # Restart the capture if a read fails this many times in a row
+  max_read_failures: 50
+  rtsp_transport: ""
+
+# ============================================================
+# Object detection & tracking (YOLOv8 + ByteTrack)
+# ============================================================
+detection:
+  model: "yolov8n.pt"            # YOLOv8 weights (auto-downloaded on first run)
+  device: "auto"                 # "cpu", "cuda", "mps" or "auto"
+  conf_threshold: 0.35
+  iou_threshold: 0.45
+  imgsz: 320                  # 480 ≈ 86 ms/det on M2 (MPS); 320 ≈ 12 ms (7x
+                              # faster, ~150 fps headroom). YOLOv8n still finds
+                              # vehicles well at 320; raise back if you need
+                              # tiny/distant cars detected more reliably.
+  # Downscale the frame before detection: 0.5 = detect on 960x540 (2-3x
+  # faster on MPS, boxes scaled back to full resolution). 1.0 = no scaling.
+  detect_scale: 0.5
+  # Run YOLO on every Nth frame; in-between frames reuse the last detections
+  # (tracking keeps IDs alive). Halves the biggest per-frame cost at 30fps.
+  detect_every_n_frames: 2
+  # Classes to track: 0=person 1=bicycle 2=car 3=motorcycle 5=bus 7=truck
+  # Cars get fine make/model; everything else gets one coarse word
+  # (Pedestrian / Cyclist / Motorbike / Bus / Truck).
+  vehicle_classes: [0, 1, 2, 3, 5, 7]
+  tracker: "bytetrack.yaml"      # ultralytics tracker config ("botsort.yaml" also available)
+  tracker_persist: true
+
+# ============================================================
+# Vehicle attribute classification (make / model / year / color)
+# ============================================================
+classification:
+  enabled: true
+  # Local make/model classifier — fine-tuned on dashcam crops
+  # (RunPod RTX 4090, 8 epochs: top-1 93.2% / top-5 96.2%).
+  model_path: "models/r50_dashcam.pt"
+  device: "auto"
+  classify_every_n_frames: 30
+  # Re-run the (background) deep classifier for a tracked car at most once per
+  # this many seconds. ResNet50 inference (~40ms) never blocks the video now —
+  # it runs on a worker thread and the loop shows the last cached label.
+  classify_refresh_interval: 1.0
+  # Only show make/model when the model's confidence is at least this.
+  # Below it the label is "Unknown" (no random guesses on the dashcam).
+  min_display_conf: 0.60
+  # ROIs smaller than this (px^2) are unresolvable blobs — skip deep
+  # classification entirely (hallucinates with fake high confidence).
+  # 100x100 px = ~12000, so cars further away are ignored (tag stays
+  # "Unknown" instead of a confident lie). Also requires min_box_side.
+  min_classify_area: 12000
+  # Only engage classification/following when the box long side is at least
+  # this many px — ignores cars that are extremely far (tiny fuzzy dots).
+  min_box_side: 90
+  # HSV color analysis always works without any model
+  color_analysis: true
+  color_algorithm: lab_kmeans
+
+# ============================================================
+# ANPR + Privacy enforcement (GDPR auto-blur)
+# ============================================================
+anpr:
+  # Privacy: plates are blurred on the stream AND recordings. Recommended for
+  # any drive/sharing — GDPR. (false = read plates, no anonymization)
+  enabled: true
+  blur_plates: true              # true = plates auto-blurred on stream + disk
+  # Plate-based re-ID: remember a car's make/model/color keyed by its plate
+  # (in memory only, plates never streamed). A car seen again with the same
+  # plate reuses the stored attrs and SKIPS the heavy classifier.
+  plate_reid: true
+  # Forget re-ID memory for a plate not seen for this many seconds (bounded
+  # PII held in RAM). 0 = keep forever.
+  plate_memory_ttl: 3600
+  # Optional YOLOv8 plate detector weights (e.g. "plate.pt"). If empty,
+  # a contour heuristic + OCR whitelist is used inside the vehicle ROI.
+  plate_model: "storage/models/plate.pt"
+  # Re-read a tracked car's plate at most once per this many seconds, on a
+  # BACKGROUND thread (plate YOLO + OCR are the slowest pipeline steps and
+  # would otherwise stall the recording). 0.5-2.0 is a good range.
+  plate_refresh_interval: 1.5
+  ocr_engine: "easyocr"          # "easyocr" or "paddleocr" or "none"
+  ocr_lang: ["en"]               # plate characters; "cs+sk" for CZ/SK plates
+  ocr_min_confidence: 0.4
+  # Plate lookup: a JSON file mapping plate -> info, e.g.
+  # {"ABC1234": {"owner": "internal-fleet", "notes": ""}}
+  plate_database: "storage/plates.json"
+
+privacy:
+  # "pixel" (mosaic) or "gaussian"
+  mode: "pixel"
+  pixel_size: 12                 # mosaic block size in px
+  gaussian_kernel: 41            # must be odd
+  gaussian_sigma: 0              # 0 = auto from kernel
+  # Extra padding (fraction of plate width) around the plate before blurring
+  pad_ratio: 0.2
+  # Anonymize the FULL frame instead of just plate ROIs (maximum privacy)
+  blur_full_frame: false
+  # Draw a "PRIVACY: BLURRED" overlay box where a plate was removed
+  show_blur_overlay: true
+  # GDPR hard gate: when true, the app REFUSES to start unless
+  # anpr.blur_plates is also true (no readable plates on disk/stream).
+  require_blur: false
+
+# ============================================================
+# Grok Vision make/model recognition (xAI API, async worker)
+# API key: XAI_API_KEY in ./.env (never committed)
+# ============================================================
+grok:
+  enabled: false              # fully local now — r50_dashcam handles cars
+  model: "grok-4.6"              # falls back to grok-4.5 -> grok-4.3 -> grok-3-vision
+  # Hybrid mode: only query Grok when the local classifier is unsure
+  # (confidence below this) or says Unknown. Cars only — trucks/bikes get
+  # coarse YOLO labels and never hit the API. Set fallback_conf: 1.0 to
+  # always use Grok, or enabled: false for fully local.
+  # 1.0 = ALWAYS query Grok for cars (local r50 is overconfident on dashcam).
+  fallback_conf: 0.45
+  # Skip crops smaller than this area (tiny/blurry cars)
+  min_crop_area: 4096
+  max_pending: 32                # pending API requests before dropping (worker stays fast)
+  # Auto-collect labeled crops for future fine-tuning
+  save_dataset: true
+  dataset_dir: "storage/dataset"
+  min_confidence: 0.6            # only save crops labeled with >= this confidence
+  min_save_long_side: 200        # skip tiny crops in the dataset (poor fine-tune data)
+  max_saves_per_track: 4         # max labeled samples per car (one per re-request as it grows)
+
+# ============================================================
+# Road context (OPTIONAL — traffic light state + speed limit)
+# Off by default: zero cost until enabled. When enabled, the
+# shared YOLO tracker also follows traffic lights (COCO 9) and
+# a background worker classifies lamp state / reads speed signs.
+# Dashboard shows light ONLY while tracked; MAX only when CONFIRMED
+# (high-conf read or two agreeing reads) else '?' — never a guess.
+# ============================================================
+road:
+  enabled: true
+  sign_model: models/signs/gtsrb_signs.pt
+  min_light_side: 24            # px; smaller lights are noise -> ignored
+  light_ttl_secs: 1             # hide state this long after last sighting
+  maxspeed_persist_secs: 300    # confirmed limit expires after this long
+  sign_scan_interval: 2.0       # secs between speed-sign frame scans
+  light_conf_min: 0.55
+
+# ============================================================
+# Recorder & session storage
+# ============================================================
+recorder:
+  enabled: true
+  recordings_dir: "storage/recordings"
+  session_log: "storage/session_vehicles.sqlite"
+  # Drop session rows older than this many days (0 = keep forever). Plates
+  # are personal data — bounded retention is the GDPR-safe default.
+  session_retention_days: 30
+  # Output codec; "mp4v" for .mp4, "avc1" (H.264, QuickTime-friendly)
+  codec: "avc1"
+  output_ext: "mp4"
+
+# ============================================================
+# Streaming / server
+# ============================================================
+server:
+  # 127.0.0.1 = local dashboard only (privacy-first default). Use 0.0.0.0
+  # only if you intentionally expose the dashboard/API to the LAN — note the
+  # API has no auth and previously leaked raw plate text via /api/vehicles.
+  host: "127.0.0.1"
+  port: 8500
+  jpeg_quality: 70
+  max_stream_fps: 30             # cap WebSocket frame rate
+
+# Batched Gemini fallback (ALTERNATIVE to Grok): queues uncertain crops and
+# sends up to `batch_size` in ONE API call. DISABLED by default — pure local
+# for now. To enable: set enabled: true + put GEMINI_API_KEY in .env.
+gemini:
+  enabled: false
+  model: "gemini-3.5-flash-lite"
+  fallback_conf: 0.45          # same hybrid rule as grok
+  batch_size: 50               # crops per API request
+  flush_interval: 600          # seconds; flush early even if batch not full
+  min_crop_area: 4096
+  max_pending: 32
+
+# ============================================================
+# DeepSeek Vision make/model recognition (alternative to Grok)
+# OpenAI-compatible chat completions; images auto-resized to ~800px
+# (~384 tokens each). API key: DEEPSEEK_API_KEY in ./.env
+# ============================================================
+deepseek:
+  enabled: false
+  model: "deepseek-v4-flash-vision-exp"
+  fallback_conf: 0.45          # same hybrid rule as grok/gemini
+  min_crop_area: 4096
+  max_pending: 8
+  save_dataset: true
+  dataset_dir: "storage/dataset"
+  min_confidence: 0.6
+  min_save_long_side: 200
+  max_saves_per_track: 4

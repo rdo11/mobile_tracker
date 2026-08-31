@@ -1,0 +1,48 @@
+# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Models / weights (large binaries, re-downloadable)
+*.pt
+*.safetensors
+*.onnx
+models/stanford_cars_convnext/
+
+# Recordings, datasets, session DBs (personal data / PII)
+storage/recordings/
+storage/dataset/
+storage/session_vehicles.sqlite
+storage/session_vehicles.sqlite-*
+storage/*.json
+*.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Big unused legacy model dir
+models/
+
+.env.bak
+storage/
+
+# Pod bundle tars (datasets — not for public repo)
+pod_bundle/*.tar
+pod_bundle_v*/train_*.tar
+pod_bundle_v*/dashcam_val_*.tar
+
+# Project-internal docs (personal history)
+MORNING_BRIEFING.txt
+NIGHT_COMMAND.txt
+SESSION_NOTES.md
+SSH_KEY_FIX.txt
+linkedin_post.*
+final_compare.txt
+
+# Transient pod bundles (upload artifacts — not source)
+pod_bundle*/

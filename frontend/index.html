@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mobile Tracker — Privacy-First Vehicle Pipeline</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0b0f14; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .blink { animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: 0.25; } }
+</style>
+</head>
+<body class="text-gray-100 min-h-screen">
+<div id="app" class="max-w-[1400px] mx-auto p-4 space-y-4">
+
+  <header id="app-header" class="flex items-center justify-between">
+    <div>
+      <h1 class="text-xl font-bold tracking-tight">Mobile Tracker</h1>
+      <p class="text-xs text-gray-400">privacy-first vehicle tracking · ANPR plates auto-blurred on stream &amp; on disk</p>
+    </div>
+    <div class="flex items-center gap-3 text-sm">
+      <button id="fs-btn" class="px-3 py-1.5 rounded-full bg-gray-700 text-white font-semibold hover:bg-gray-600 active:scale-95 transition">⛶ Fullscreen</button>
+      <span id="conn-badge" class="px-3 py-1 rounded-full bg-red-900/60 text-red-200">CONNECTING</span>
+      <span id="rec-badge" class="px-3 py-1 rounded-full bg-gray-800 text-gray-300">NOT RECORDING</span>
+      <button id="rec-btn" class="px-4 py-1.5 rounded-full bg-red-600 text-white font-semibold hover:bg-red-500 active:scale-95 transition">● REC</button>
+    </div>
+  </header>
+
+  <div id="main-grid" class="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-4">
+
+    <!-- video stream -->
+    <section id="stream-section" class="bg-gray-900 rounded-xl border border-gray-800 p-3">
+      <div class="relative">
+        <canvas id="stream" class="w-full rounded-lg bg-black" style="aspect-ratio: 16/9;"></canvas>
+        <div id="no-frame" class="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
+          waiting for camera frame…
+        </div>
+        <div class="absolute top-2 left-2 flex gap-2 text-[11px] font-mono">
+          <span class="px-2 py-1 rounded bg-black/70" id="stat-fps">FPS --</span>
+          <span class="px-2 py-1 rounded bg-black/70" id="stat-frames">FRAMES 0</span>
+          <span class="px-2 py-1 rounded bg-black/70 text-red-300" id="stat-blurred">BLURRED 0</span>
+        </div>
+        <div id="road-badge" class="absolute top-2 right-2 hidden items-center gap-2 text-sm font-bold">
+          <span id="road-light" class="hidden px-2 py-1 rounded bg-black/80"></span>
+          <span id="road-max" class="px-3 py-1.5 rounded-full border-4 border-red-600 bg-white text-black leading-none"></span>
+        </div>
+      </div>
+      <div id="engine-status" class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs"></div>
+    </section>
+
+    <!-- live analytics -->
+    <section id="analytics-section" class="bg-gray-900 rounded-xl border border-gray-800 p-4 space-y-4">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400">Live Analytics</h2>
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="text-gray-400 border-b border-gray-800 text-left">
+            <th class="py-1 pr-2">Time</th>
+            <th class="py-1 pr-2">ID</th>
+            <th class="py-1 pr-2">Make &amp; Model</th>
+            <th class="py-1 pr-2">Year</th>
+            <th class="py-1 pr-2">Color</th>
+            <th class="py-1 pr-2">Plate</th>
+          </tr>
+        </thead>
+        <tbody id="det-tbody" class="divide-y divide-gray-800/60"></tbody>
+      </table>
+      <div class="text-[11px] text-gray-500">
+        <span class="status-dot bg-amber-400"></span> plate blur disabled —
+        <span class="text-red-300">re-enable in config.yaml (anpr.enabled) when needed</span>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('stream');
+const ctx = canvas.getContext('2d');
+let ws = null;
+let reconnTimer = null;
+let recording = false;
+
+function toggleRecord() {
+  const action = recording ? 'stop' : 'start';
+  fetch('/api/record', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  }).catch(() => {});
+}
+
+// Near-fullscreen driving view: collapse header + sidebar, stretch the video.
+let fsMode = false;
+function toggleFullscreen() {
+  fsMode = !fsMode;
+  const app = document.getElementById('app');
+  const hdr = document.getElementById('app-header');
+  const side = document.getElementById('analytics-section');
+  const grid = document.getElementById('main-grid');
+  const btn = document.getElementById('fs-btn');
+  if (fsMode) {
+    app.classList.add('max-w-full', 'p-0', 'space-y-0');
+    app.classList.remove('max-w-[1400px]', 'p-4', 'space-y-4');
+    hdr.style.display = 'none';
+    side.style.display = 'none';
+    grid.classList.remove('xl:grid-cols-[1fr_360px]');
+    grid.classList.add('grid-cols-1');
+    document.querySelector('#stream-section').classList.remove('rounded-xl','border','p-3');
+    document.querySelector('#stream-section').style.borderRadius = '0';
+    document.querySelector('#stream-section').style.padding = '0';
+    btn.textContent = '⛶ Exit';
+  } else {
+    app.classList.add('max-w-[1400px]', 'p-4', 'space-y-4');
+    app.classList.remove('max-w-full', 'p-0', 'space-y-0');
+    hdr.style.display = '';
+    side.style.display = '';
+    grid.classList.add('xl:grid-cols-[1fr_360px]');
+    grid.classList.remove('grid-cols-1');
+    document.querySelector('#stream-section').classList.add('rounded-xl','border','p-3');
+    btn.textContent = '⛶ Fullscreen';
+  }
+}
+document.getElementById('fs-btn').addEventListener('click', toggleFullscreen);
+
+function setConn(cls, text) {
+  const b = document.getElementById('conn-badge');
+  b.className = 'px-3 py-1 rounded-full ' + cls;
+  b.textContent = text;
+}
+
+function fmt(v, d='--') { return v === undefined || v === null || v === '' ? d : v; }
+
+function drawImageBitmap(bitmap) {
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  ctx.drawImage(bitmap, 0, 0);
+  document.getElementById('no-frame').style.display = 'none';
+}
+
+function addDetection(d) {
+  const tbody = document.getElementById('det-tbody');
+  const tr = document.createElement('tr');
+  tr.className = 'text-gray-200';
+  const plateTxt = d.plate_status || 'none';
+  const plateCell = plateTxt.includes('MATCH')
+    ? '<span class="text-amber-300">DB MATCH</span>'
+    : plateTxt.includes('ANONYMIZED')
+      ? '<span class="text-red-300">ANONYMIZED</span>'
+      : '<span class="text-gray-500">none</span>';
+  tr.innerHTML = `
+    <td class="py-1 pr-2 font-mono text-gray-400">${fmt(d.timestamp)}</td>
+    <td class="py-1 pr-2 text-cyan-300 font-mono">#${fmt(d.track_id)}</td>
+    <td class="py-1 pr-2">${fmt(d.make_model)}</td>
+    <td class="py-1 pr-2">${fmt(d.year_range)}</td>
+    <td class="py-1 pr-2"><span class="inline-block w-2.5 h-2.5 rounded-full mr-1 align-middle" style="background:${colorHex(d.color)}"></span>${fmt(d.color)}</td>
+    <td class="py-1 pr-2">${plateCell}</td>`;
+  tbody.prepend(tr);
+  while (tbody.children.length > 50) tbody.removeChild(tbody.lastChild);
+}
+
+function colorHex(c) {
+  const map = { Black:'#111', White:'#eee', Silver:'#c0c0c0', Gray:'#888', Red:'#e11',
+    Orange:'#f80', Yellow:'#fd0', Green:'#2a2', Blue:'#26c', Purple:'#a3a', Brown:'#840' };
+  return map[c] || '#555';
+}
+
+function updateStats(s) {
+  if (!s) return;
+  if (s.road) updateRoad(s.road);
+  document.getElementById('stat-fps').textContent = 'FPS ' + fmt(s.fps, '--');
+  document.getElementById('stat-frames').textContent = 'FRAMES ' + fmt(s.frames, 0);
+  document.getElementById('stat-blurred').textContent = 'BLURRED ' + fmt(s.frames_blurred, 0);
+  const rec = document.getElementById('rec-badge');
+  const btn = document.getElementById('rec-btn');
+  const conn = document.getElementById('conn-badge');
+  if (s.signal_lost) {
+    conn.className = 'px-3 py-1 rounded-full bg-red-900/60 text-red-200 blink';
+    conn.textContent = 'NO SIGNAL';
+  } else if (ws && ws.readyState === WebSocket.OPEN) {
+    conn.className = 'px-3 py-1 rounded-full bg-emerald-900/60 text-emerald-200';
+    conn.textContent = 'LIVE';
+  }
+  if (s.recording) {
+    const el = s.rec_elapsed || 0;
+    const mm = String(Math.floor(el / 60)).padStart(2, '0');
+    const ss = String(el % 60).padStart(2, '0');
+    rec.className = 'px-3 py-1 rounded-full bg-red-900/80 text-red-100 blink';
+    rec.textContent = 'REC ● ' + (s.recording_path || '').split('/').pop() + ' (' + mm + ':' + ss + ')';
+    btn.textContent = '■ STOP';
+    btn.className = 'px-4 py-1.5 rounded-full bg-gray-700 text-white font-semibold hover:bg-gray-600 active:scale-95 transition';
+  } else {
+    rec.className = 'px-3 py-1 rounded-full bg-gray-800 text-gray-300';
+    rec.textContent = 'NOT RECORDING';
+    btn.textContent = '● REC';
+    btn.className = 'px-4 py-1.5 rounded-full bg-red-600 text-white font-semibold hover:bg-red-500 active:scale-95 transition';
+  }
+  recording = s.recording;
+  const wrap = document.getElementById('engine-status');
+  const engines = [
+    ['DETECTION', s.tracker?.available, s.tracker?.error],
+    ['CLASSIFIER', s.classifier?.available, s.classifier?.error || '(HSV color)'],
+    ['OCR', s.privacy?.ocr_available, '(blur-only if missing)'],
+    ['PLATE MODEL', s.privacy?.plate_model, s.privacy?.mode || ''],
+  ];
+  wrap.innerHTML = engines.map(([name, ok, note]) => `
+    <div class="rounded-lg bg-gray-800/60 px-3 py-2">
+      <div class="flex items-center gap-2">
+        <span class="status-dot ${ok ? 'bg-emerald-400' : 'bg-amber-400'}"></span>
+        <span class="font-mono">${name}</span>
+      </div>
+      <div class="text-[10px] text-gray-400 mt-1 truncate">${note || (ok ? 'ready' : 'off')}</div>
+    </div>`).join('');
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => setConn('bg-emerald-900/60 text-emerald-200', 'LIVE');
+  ws.onclose = () => {
+    setConn('bg-red-900/60 text-red-200', 'DISCONNECTED');
+    clearTimeout(reconnTimer);
+    reconnTimer = setTimeout(connect, 1500);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = async (ev) => {
+    if (ev.data instanceof ArrayBuffer) {
+      try {
+        const bmp = await createImageBitmap(new Blob([ev.data], { type: 'image/jpeg' }));
+        drawImageBitmap(bmp);
+        bmp.close();
+      } catch (e) { /* ignore frame hiccups */ }
+    } else {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'detections') msg.detections.forEach(addDetection);
+        else if (msg.type === 'stats') updateStats(msg.stats);
+        else if (msg.type === 'road') updateRoad(msg.road);
+      } catch (e) { /* ignore */ }
+    }
+  };
+  ws.onopen && ws.send('ping');
+}
+
+fetch('/api/stats').then(r => r.json()).then(updateStats).catch(() => {});
+
+// ---- road context (traffic light state + confirmed speed limit) ----
+const LIGHT_STYLE = {
+  RED:    ['🔴', 'text-red-300'],
+  YELLOW: ['🟡', 'text-yellow-300'],
+  GREEN:  ['🟢', 'text-green-300'],
+};
+function updateRoad(road) {
+  const wrap = document.getElementById('road-badge');
+  const light = document.getElementById('road-light');
+  const max = document.getElementById('road-max');
+  if (!road || !road.road_on) { wrap.classList.add('hidden'); return; }
+  let any = false;
+  if (road.light) {
+    const [emoji, cls] = LIGHT_STYLE[road.light] || ['⚪', 'text-gray-300'];
+    light.textContent = emoji + ' ' + road.light;
+    light.className = 'px-2 py-1 rounded bg-black/80 font-mono text-xs ' + cls;
+    light.classList.remove('hidden');
+    any = true;
+  } else {
+    light.classList.add('hidden');
+  }
+  if (road.maxspeed) {
+    max.textContent = road.maxspeed;
+    max.classList.remove('opacity-40');
+    any = true;
+  } else {
+    // honest unknown: visible only as a dim placeholder, never a guess
+    max.textContent = '?';
+    max.classList.add('opacity-40');
+    any = true;
+  }
+  wrap.classList.toggle('hidden', !any);
+  wrap.classList.toggle('flex', true);
+}
+document.getElementById('rec-btn').addEventListener('click', toggleRecord);
+connect();
+</script>
+</body>
+</html>
