@@ -70,3 +70,4 @@ build_report_pdf.py
 pod_bundle/compare_ckpts.py
 pod_bundle/train_classifier.py
 pod_compare_*.txt
+hf_upload/
